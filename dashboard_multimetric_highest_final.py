@@ -247,12 +247,14 @@ st.sidebar.write(f"Number of ROI columns: {len(roi_names_sidebar)}")
 
 st.subheader("Ask a Question")
 
-question = st.text_input(
-    "Examples:\n"
-    "- What has the highest correlation with blast exposure for ODI?\n"
-    "- What is the age-corrected correlation for EC_kappa versus blast exposure in brain region HIPPOCAMPUS?\n"
-)
+st.markdown("""
+### 💡 Example Questions You Can Ask:
 
+- What are the available noddi metrics?
+- What is the age-corrected correlation between ODI and timeofexposure for the THALAMUS_right?
+- Which brain region shows the strongest correlation with blast exposure?
+- Show me all regions where ODI is significantly correlated with exposure.
+""")
 # ---- Metric listing ----
 if question and ("available noddi metrics" in question.lower() or "list metrics" in question.lower()):
     st.subheader("Available NODDI Metrics")
