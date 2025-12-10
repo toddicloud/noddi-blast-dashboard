@@ -7,13 +7,12 @@ from scipy import stats
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 
-
-
 st.set_page_config(page_title="Multi-Metric NODDI + Blast Dashboard", layout="wide")
 
 # ============================
 # PATHS
 # ============================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BLAST_FILE = os.path.join(BASE_DIR, "blastforunc.txt")
 
@@ -90,12 +89,15 @@ def normalize_subject_id(s):
 @st.cache_data
 def load_metric_data(metric_name):
     df = pd.read_csv(os.path.join(BASE_DIR, METRIC_FILES[metric_name]))
+    # first column is subjectid
     df = df.rename(columns={df.columns[0]: "subjectid"})
 
+    # first row holds ROI names
     roi_row = df.iloc[0]
     roi_cols = [c for c in df.columns if c not in ["subjectid", "scantype"]]
     roi_names = {c: str(roi_row[c]).strip() for c in roi_cols}
 
+    # drop the ROI-name row
     df = df.iloc[1:].copy()
     df["subjectid"] = df["subjectid"].astype(str).str.strip()
 
@@ -115,6 +117,13 @@ def load_blast_data():
     return blast
 
 def merge_metric_blast(metric_name):
+    if metric_name not in METRIC_FILES:
+        st.error(
+            f"Unrecognized metric: '{metric_name}'. "
+            f"Available metrics are: {list(METRIC_FILES.keys())}"
+        )
+        return None, None, None
+
     df, roi_names, roi_cols = load_metric_data(metric_name)
     blast = load_blast_data()
     merged = df.merge(
@@ -135,20 +144,45 @@ def partial_corr(df, x, y, covariates):
     return stats.pearsonr(rx, ry)
 
 # ============================
-# TASK PARSER (metric + analysis type)
+# TASK + METRIC PARSER
 # ============================
 
-def parse_task_and_metric(question):
-    q = question.lower()
+def parse_task_and_metric(question: str):
+    """
+    Returns (metric_guess, task)
 
+    task ∈ {"max_age_corrected", "age_corrected",
+            "max_corr", "simple_corr",
+            "global_significant_exposure", None}
+    """
+    q = question.lower().strip()
+
+    # ---- Guess metric from text ----
     metric_guess = None
     for m in METRIC_FILES:
         if m.lower() in q:
             metric_guess = m
             break
 
+    # Default to ODI if user says "NODDI" or "ODI" but we didn't pick it up earlier
+    if metric_guess is None:
+        if "odi" in q or "noddi" in q:
+            metric_guess = "ODI"
+
+    # ---- Global "all regions significantly correlated with exposure" ----
+    if (
+        ("all regions" in q or "all brain regions" in q or "all noddi regions" in q)
+        and ("exposure" in q or "timeofexposure" in q)
+        and ("significant" in q or "significantly" in q or "sig " in q)
+    ):
+        # If still no metric, fall back to ODI
+        if metric_guess is None:
+            metric_guess = "ODI"
+        return metric_guess, "global_significant_exposure"
+
+    # ---- Other patterns ----
     has_max   = any(x in q for x in ["highest", "strongest", "max", "maximum"])
-    has_corr  = "correlation" in q
+    has_corr  = "correlation" in q or "correlat" in q
     has_age   = "age" in q
     has_blast = any(x in q for x in ["blast", "exposure", "timeofexposure"])
 
@@ -236,25 +270,30 @@ def scatter_with_stats(x, y, r, p, title, xlabel):
 
 st.title("Multi-Metric NODDI + Blast Exposure Dashboard")
 
+# ---- Sidebar: manual metric selection ----
 metric_sidebar = st.sidebar.selectbox("Select Metric (Manual)", list(METRIC_FILES.keys()))
 if metric_sidebar in METRIC_DESCRIPTIONS:
     st.sidebar.info(METRIC_DESCRIPTIONS[metric_sidebar])
 
 df_sidebar, roi_names_sidebar, region_cols_sidebar = merge_metric_blast(metric_sidebar)
-st.sidebar.header("Data overview")
-st.sidebar.write(f"Number of subjects: {df_sidebar['subjectid'].nunique()}")
-st.sidebar.write(f"Number of ROI columns: {len(roi_names_sidebar)}")
 
 st.subheader("Ask a Question")
 
-question = st.markdown("""
-### 💡 Example Questions You Can Ask:
+# ---- Example questions with larger font ----
+st.markdown("""
+<div style="font-size:20px;">
+<b>Example questions:</b><br><br>
+• What is the correlation between NODDI ODI and blast exposure for the CINGULATE_GYRUS_left?<br>
+• What is the age-corrected correlation between ODI and timeofexposure for the THALAMUS_right?<br>
+• Which brain region shows the strongest correlation between ODI with blast exposure?<br>
+• Show me all regions where ODI is significantly correlated with exposure?<br>
+• What are the available brain regions?<br>
+• What are the available NODDI metrics?<br>
+</div>
+""", unsafe_allow_html=True)
 
-- What are the available noddi metrics?
-- What is the age-corrected correlation between ODI and timeofexposure for the THALAMUS_right?
-- Which brain region shows the strongest correlation with blast exposure?
-- Show me all regions where ODI is significantly correlated with exposure.
-""")
+question = st.text_input("Ask a question about the data:")
+
 # ---- Metric listing ----
 if question and ("available noddi metrics" in question.lower() or "list metrics" in question.lower()):
     st.subheader("Available NODDI Metrics")
@@ -264,27 +303,99 @@ if question and ("available noddi metrics" in question.lower() or "list metrics"
     )
     st.dataframe(dfm, use_container_width=True)
     st.stop()
+# ---- Brain region listing ----
+if question and (
+    "available brain regions" in question.lower()
+    or "list brain regions" in question.lower()
+    or "what are the available brain regions" in question.lower()
+    or "what brain regions are available" in question.lower()
+):
+    if df_sidebar is None or roi_names_sidebar is None or region_cols_sidebar is None:
+        st.error("Could not load data for the selected metric.")
+        st.stop()
+
+    st.subheader(f"Available brain regions for metric: {metric_sidebar}")
+
+    regions_df = pd.DataFrame(
+        {
+            "Region Column": region_cols_sidebar,
+            "Region Name": [roi_names_sidebar.get(c, c) for c in region_cols_sidebar],
+        }
+    )
+    st.dataframe(regions_df, use_container_width=True)
+    st.caption(
+        "Region Column = column name in the CSV; "
+        "Region Name = human-readable label taken from the first row of the metric file."
+    )
+    st.stop()
 
 # ============================
-# ✅ SAFE ORDERED EXECUTION (NO NameError POSSIBLE)
+# MAIN QUESTION HANDLING
 # ============================
 
 if question:
+    # 1) Parse task + metric
     metric_guess, task = parse_task_and_metric(question)
-    metric_guess = metric_guess or metric_sidebar
 
-    # ✅ ALWAYS load metric BEFORE fuzzy region matching
+    if task is None:
+        st.warning(
+            "The question parser could not confidently map your question. "
+            "Try mentioning a brain region (e.g., 'cingul', 'thalam', 'hippoc') "
+            "or ask for 'all regions where ODI is significantly correlated with exposure'."
+        )
+        st.stop()
+
+    # Fallback metric: use sidebar choice if none inferred
+    if metric_guess is None:
+        metric_guess = metric_sidebar
+
+    # 2) Load data for that metric
     df_q, roi_names_q, region_cols_q = merge_metric_blast(metric_guess)
+    if df_q is None:
+        st.stop()
 
     if metric_guess in METRIC_DESCRIPTIONS:
         st.info(f"**{metric_guess}** — {METRIC_DESCRIPTIONS[metric_guess]}")
 
-    # ✅ NOW fuzzy region matching is safe
+    # 3) Special case: global all-regions significant correlation with exposure
+    if task == "global_significant_exposure":
+        st.subheader("Regions where metric is significantly correlated with blast exposure")
+
+        results = []
+        for col in region_cols_q:
+            sub = df_q[[col, "timeofexposure"]].replace([np.inf, -np.inf], np.nan).dropna()
+            if len(sub) < 5:
+                continue
+            r, p = stats.pearsonr(sub[col], sub["timeofexposure"])
+            results.append({
+                "Region Column": col,
+                "Region Name": roi_names_q.get(col, col),
+                "r": r,
+                "p": p,
+                "n": len(sub)
+            })
+
+        if not results:
+            st.warning("Not enough data to compute correlations for any region.")
+            st.stop()
+
+        res_df = pd.DataFrame(results)
+        alpha = 0.05
+        sig_df = res_df[res_df["p"] < alpha].sort_values("p")
+
+        if sig_df.empty:
+            st.info(f"No regions showed a statistically significant correlation (p < {alpha}).")
+        else:
+            st.write(f"Regions with significant correlation (p < {alpha}):")
+            st.dataframe(sig_df.reset_index(drop=True), use_container_width=True)
+        st.stop()
+
+    # 4) For other tasks, possibly need region info
     region_candidates = fuzzy_region_match(question, region_cols_q, roi_names_q)
 
     chosen_region = None
 
-    # ✅ Region selection ONLY for non-max tasks
+    # For tasks that use a single region, let the user pick if ambiguous
     if task not in ["max_corr", "max_age_corrected"]:
         if len(region_candidates) == 1:
             chosen_region = region_candidates[0]
@@ -292,8 +403,15 @@ if question:
             chosen_region = st.selectbox(
                 "Multiple regions matched. Please choose one:",
                 region_candidates,
-                format_func=lambda c: roi_names_q[c]
+                format_func=lambda c: roi_names_q.get(c, c)
             )
+        else:
+            st.warning(
+                "No matching brain regions found for that question. "
+                "Try using a distinctive part of the region name "
+                "(e.g., 'hippoc', 'cingul', 'thalam')."
+            )
+            st.stop()
 
     # ========================
     # MAX SIMPLE CORRELATION
@@ -315,9 +433,11 @@ if question:
                 sub[col].to_numpy(),
                 sub["timeofexposure"].to_numpy(),
                 r, p,
-                f"{metric_guess} — {roi_names_q[col]} (MAX correlation)",
-                roi_names_q[col]
+                f"{metric_guess} — {roi_names_q.get(col, col)} (MAX correlation)",
+                roi_names_q.get(col, col)
             )
+        else:
+            st.warning("Not enough data to compute max correlation across regions.")
 
     # ========================
     # MAX AGE-CORRECTED
@@ -339,9 +459,11 @@ if question:
                 sub[col].to_numpy(),
                 sub["timeofexposure"].to_numpy(),
                 r, p,
-                f"{metric_guess} — {roi_names_q[col]} (MAX age-corrected)",
-                roi_names_q[col]
+                f"{metric_guess} — {roi_names_q.get(col, col)} (MAX age-corrected)",
+                roi_names_q.get(col, col)
             )
+        else:
+            st.warning("Not enough data to compute max age-corrected correlation across regions.")
 
     # ========================
     # SINGLE-REGION ANALYSIS
@@ -357,9 +479,11 @@ if question:
                     sub[chosen_region].to_numpy(),
                     sub["timeofexposure"].to_numpy(),
                     r, p,
-                    f"{metric_guess} — {roi_names_q[chosen_region]} (age-corrected)",
-                    roi_names_q[chosen_region]
+                    f"{metric_guess} — {roi_names_q.get(chosen_region, chosen_region)} (age-corrected)",
+                    roi_names_q.get(chosen_region, chosen_region)
                 )
+            else:
+                st.warning("Not enough data for age-corrected correlation in that region.")
 
         elif task == "simple_corr":
             sub = df_q[[chosen_region, "timeofexposure"]].dropna()
@@ -369,14 +493,9 @@ if question:
                     sub[chosen_region].to_numpy(),
                     sub["timeofexposure"].to_numpy(),
                     r, p,
-                    f"{metric_guess} — {roi_names_q[chosen_region]}",
-                    roi_names_q[chosen_region]
+                    f"{metric_guess} — {roi_names_q.get(chosen_region, chosen_region)}",
+                    roi_names_q.get(chosen_region, chosen_region)
                 )
-
-    else:
-        st.warning(
-            "No matching brain regions found for that question. "
-            "Try using a distinctive part of the region name "
-            "(e.g., 'hippoc', 'cingul', 'thalam')."
-        )
+            else:
+                st.warning("Not enough data for simple correlation in that region.")
 
