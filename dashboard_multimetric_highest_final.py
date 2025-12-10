@@ -247,7 +247,7 @@ st.sidebar.write(f"Number of ROI columns: {len(roi_names_sidebar)}")
 
 st.subheader("Ask a Question")
 
-st.markdown("""
+question = st.markdown("""
 ### 💡 Example Questions You Can Ask:
 
 - What are the available noddi metrics?
