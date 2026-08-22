@@ -109,7 +109,7 @@ def load_metric_data(metric_name):
 
 @st.cache_data
 def load_blast_data():
-    blast = pd.read_csv(BLAST_FILE, delim_whitespace=True)
+    blast = pd.read_csv(BLAST_FILE, sep=r"\s+")
     blast["subjectid"] = blast["subjectid"].astype(str).str.strip()
     blast["age"] = pd.to_numeric(blast["age"], errors="coerce")
     blast["timeofexposure"] = pd.to_numeric(blast["timeofexposure"], errors="coerce")
