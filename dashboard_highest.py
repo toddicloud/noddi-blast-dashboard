@@ -73,7 +73,7 @@ def load_odi_data(odi_path=ODI_FILE):
 @st.cache_data
 def load_blast_data(blast_path=BLAST_FILE):
     """Load blastforunc.txt (subjectid age timeofexposure)."""
-    blast = pd.read_csv(blast_path, delim_whitespace=True)
+    blast = pd.read_csv(blast_path, sep=r"\s+")
 
     blast["subjectid"] = blast["subjectid"].astype(str).str.strip()
     blast["age"] = pd.to_numeric(blast["age"], errors="coerce")
